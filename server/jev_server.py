@@ -234,8 +234,10 @@ GOAL_BODY_RX = re.compile(
 # are scanned, which is where the user's text sits anyway.
 ENVELOPE_SCAN_CHARS = 200_000
 
-def load_key():
-    """TYPESAFE_API_KEY: env files win (the process environment can be stale)."""
+def _load_env_var(names):
+    """Load a variable by name(s) from env files first, then process environment."""
+    if isinstance(names, str):
+        names = (names,)
     override = os.environ.get("JEV_ENV_FILE", "").strip()
     paths = (override, ENV_PATH, os.path.join(HOME, ".jev.env"))
     seen = set()
@@ -247,13 +249,41 @@ def load_key():
             with open(path, encoding="utf-8") as fh:
                 for line in fh:
                     line = line.strip()
-                    if line.startswith("TYPESAFE_API_KEY="):
-                        value = line.split("=", 1)[1].strip().strip('"').strip("'")
-                        if value:
-                            return value
+                    for name in names:
+                        prefix = f"{name}="
+                        if line.startswith(prefix):
+                            value = line.split("=", 1)[1].strip().strip('"').strip("'")
+                            if value:
+                                return value
         except OSError:
             continue
-    return os.environ.get("TYPESAFE_API_KEY", "").strip()
+    for name in names:
+        val = os.environ.get(name, "").strip()
+        if val:
+            return val
+    return ""
+
+
+def load_key():
+    """TYPESAFE_API_KEY: env files win (the process environment can be stale)."""
+    return _load_env_var("TYPESAFE_API_KEY")
+
+
+def load_api_url():
+    """TYPESAFE_BASE_URL or TYPESAFE_API_URL: defaults to TypeSafe System One."""
+    url = _load_env_var(("TYPESAFE_API_URL", "TYPESAFE_BASE_URL"))
+    if not url:
+        return API
+    if "openrouter.ai" in url and not url.endswith("/decisions"):
+        return "https://openrouter.ai/api/alpha/decisions"
+    if not url.endswith(("/systemone", "/decisions")):
+        url = url.rstrip("/") + "/systemone"
+    return url
+
+
+def load_model():
+    """TYPESAFE_MODEL: defaults to jev-latest."""
+    return _load_env_var("TYPESAFE_MODEL") or MODEL
 
 
 def warn_if_key_missing():
@@ -561,10 +591,12 @@ def fallback_candidates(native_model, payload):
 
 
 def call_jev(key, state, questions=None, timeout=4.0):
-    body = json.dumps({"model": MODEL, "state": state,
+    api_url = load_api_url()
+    model = load_model()
+    body = json.dumps({"model": model, "state": state,
                        "questions": QUESTIONS if questions is None else questions}).encode()
     req = urllib.request.Request(
-        API,
+        api_url,
         data=body,
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         method="POST",

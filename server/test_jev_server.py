@@ -79,6 +79,29 @@ class KeyLoading(unittest.TestCase):
             self.assertFalse(jev.warn_if_key_missing())
         self.assertEqual(stderr.getvalue(), "")
 
+    def test_custom_api_url_and_model_from_env_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = os.path.join(tmp, "custom.env")
+            with open(env_file, "w", encoding="utf-8") as fh:
+                fh.write("TYPESAFE_BASE_URL=https://custom.gateway/use\n")
+                fh.write("TYPESAFE_MODEL=Microsoft-Decision-1\n")
+            with mock.patch.object(jev, "ENV_PATH", env_file), \
+                 mock.patch.object(jev, "HOME", tmp), \
+                 mock.patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(jev.load_api_url(), "https://custom.gateway/use/systemone")
+                self.assertEqual(jev.load_model(), "Microsoft-Decision-1")
+
+    def test_custom_api_url_without_trailing_slash_preserves_systemone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = os.path.join(tmp, "custom.env")
+            with open(env_file, "w", encoding="utf-8") as fh:
+                fh.write("TYPESAFE_API_URL=https://custom.gateway/v1/systemone\n")
+            with mock.patch.object(jev, "ENV_PATH", env_file), \
+                 mock.patch.object(jev, "HOME", tmp), \
+                 mock.patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(jev.load_api_url(), "https://custom.gateway/v1/systemone")
+                self.assertEqual(jev.load_model(), "jev-latest")
+
 
 class ResponseIdContinuity(unittest.TestCase):
     """One response id per relayed stream, however many gateways touched it.
