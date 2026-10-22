@@ -62,25 +62,51 @@ import sys
 from contextlib import ExitStack
 from itertools import chain
 from local_runtime import STATE
-from routing_policy import POLICY_VERSION
+from routing_policy import POLICY_VERSION, LUNA, SOL, ASTRA, TERRA
 
 LIVE_LOG = os.path.join(STATE, "jev-router-live.jsonl")
 BACKTEST_STATE = os.path.join(STATE, "jev-backtest.json")
 
-LUNA, SOL, ASTRA = "gpt-5.6-luna", "gpt-5.6-sol", "gpt-6-astra"
-TERRA = "gpt-5.6-terra"
 NATIVE_TIERS = (LUNA, TERRA, SOL, ASTRA)
+
+class _TierMappedDict(dict):
+    """Dictionary that falls back to substring matching for tier names (luna, terra, sol, astra)."""
+    def __getitem__(self, key):
+        try:
+            return super().__getitem__(key)
+        except KeyError:
+            if isinstance(key, str):
+                k_lower = key.lower()
+                for tier in ("luna", "terra", "sol", "astra"):
+                    if tier in k_lower:
+                        for existing_k, val in self.items():
+                            if isinstance(existing_k, str) and tier in existing_k.lower():
+                                return val
+            raise
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+    def __contains__(self, key):
+        try:
+            self[key]
+            return True
+        except KeyError:
+            return False
 
 # Prices per 1M tokens (input, output, cached input, cache write), short context,
 # Sep 2026 — kept identical to poc/backtest_savings.py so the two tools agree.
-PRICES = {
+PRICES = _TierMappedDict({
     ASTRA: (10.00, 50.00, 1.00, 12.50),
     SOL: (4.00, 20.00, 0.40, 5.00),
-    "gpt-5.6-terra": (2.00, 12.00, 0.20, 2.50),
+    TERRA: (2.00, 12.00, 0.20, 2.50),
     LUNA: (0.20, 1.20, 0.02, 0.25),
     # Codex-dry tandem (Go allowance), off-peak.
     "deepseek/deepseek-v4.1-flash": (0.15, 0.60, 0.015, 0.15),
-}
+})
 API_FAST_X = 2.0
 
 # Token mix per turn, from the measurement published in BACKTEST.md: 237 turns,
@@ -88,9 +114,28 @@ API_FAST_X = 2.0
 # 1,616,250 output tokens.
 MIX = {"input": 2_886_560, "cached": 2_836_607, "output": 6_819}
 
+class _ShortModelDict(dict):
+    def __getitem__(self, key):
+        try:
+            return super().__getitem__(key)
+        except KeyError:
+            if isinstance(key, str):
+                k_lower = key.lower()
+                for tier in ("luna", "terra", "sol", "astra"):
+                    if tier in k_lower:
+                        return tier
+                return key.split("/")[-1]
+            raise
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
 # Short names of the native native model ladder, then the tandem family. Anything else is
 # reported under its own leaf name.
-SHORT = {
+SHORT = _ShortModelDict({
     LUNA: "luna",
     TERRA: "terra",
     SOL: "sol",
@@ -98,7 +143,7 @@ SHORT = {
     "opencode-go/deepseek-v4.1-flash": "tandem",
     "deepseek/deepseek-v4.1-flash": "tandem",
     "opencode-go/glm-5.3-flash": "tandem",
-}
+})
 CHEAPEST = LUNA
 # Threshold used by historical tier policies, not by current joint decisions.
 CONF_GATE = 0.5  # historical diagnostics only; joint routing has no confidence gate
@@ -106,8 +151,11 @@ CONF_GATE = 0.5  # historical diagnostics only; joint routing has no confidence 
 # Standard ChatGPT credit rates, 2026-09-20:
 # https://learn.chatgpt.com/docs/pricing
 # (input, cached input, output) per million tokens. Reasoning is part of output.
-CREDIT_RATES = {LUNA: (5.0, 0.5, 30.0), SOL: (100.0, 10.0, 500.0),
-                ASTRA: (250.0, 25.0, 1250.0)}
+CREDIT_RATES = _TierMappedDict({
+    LUNA: (5.0, 0.5, 30.0),
+    SOL: (100.0, 10.0, 500.0),
+    ASTRA: (250.0, 25.0, 1250.0),
+})
 
 
 def token_credits(model, usage):

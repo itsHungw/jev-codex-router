@@ -15,6 +15,7 @@ API = "https://api.typesafe.ai/v1/systemone"
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "server"))
 from routing_policy import (MODEL_PROFILES, POLICY_VERSION, QUESTIONS,
+                            LUNA, TERRA, SOL, ASTRA,
                             decision_from_answers, route)
 
 CANDIDATES = MODEL_PROFILES

@@ -15,6 +15,7 @@ Usage: python3 backtest_savings.py [--days 7] [--limit-unique 300]
 import argparse, datetime, glob, hashlib, importlib.util, json, os, re, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "server"))
 import jev_server as jev
+from routing_policy import LUNA, SOL, ASTRA, TERRA
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 _spec = importlib.util.spec_from_file_location("poc", os.path.join(HERE, "route_poc.py"))
@@ -25,15 +26,43 @@ _spec.loader.exec_module(poc)
 SESS_ROOT = os.path.expanduser("~/.codex/sessions")
 RESULT_PATH = os.path.expanduser("~/.codex/codex-router/jev-backtest.json")
 
+class _TierMappedDict(dict):
+    """Dictionary that falls back to substring matching for tier names (luna, terra, sol, astra)."""
+    def __getitem__(self, key):
+        try:
+            return super().__getitem__(key)
+        except KeyError:
+            if isinstance(key, str):
+                k_lower = key.lower()
+                for tier in ("luna", "terra", "sol", "astra"):
+                    if tier in k_lower:
+                        for existing_k, val in self.items():
+                            if isinstance(existing_k, str) and tier in existing_k.lower():
+                                return val
+            raise
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+    def __contains__(self, key):
+        try:
+            self[key]
+            return True
+        except KeyError:
+            return False
+
 # Prices per 1M tokens (short context, OpenAI API page, Sep 2026)
-PRICES = {
-    "gpt-6-astra":   (10.00, 50.00, 1.00, 12.50),   # (input, output, cached_in, cache_write)
-    "gpt-5.6-sol":   (4.00, 20.00, 0.40, 5.00),
-    "gpt-5.6-terra": (2.00, 12.00, 0.20, 2.50),
-    "gpt-5.6-luna":  (0.20, 1.20, 0.02, 0.25),
+PRICES = _TierMappedDict({
+    ASTRA:   (10.00, 50.00, 1.00, 12.50),   # (input, output, cached_in, cache_write)
+    SOL:     (4.00, 20.00, 0.40, 5.00),
+    TERRA:   (2.00, 12.00, 0.20, 2.50),
+    LUNA:    (0.20, 1.20, 0.02, 0.25),
     # off-peak, aligned with V4 Flash (cf. router docs)
     "deepseek/deepseek-v4.1-flash": (0.15, 0.60, 0.015, 0.15),
-}
+})
 TAG_CLEAN = re.compile(r"<[^>]+>")
 
 
@@ -201,7 +230,7 @@ def main():
 
     pct = (sum_actual - sum_jev) / sum_actual * 100 if sum_actual else 0
     scen = {name: sum(cost(name, tk["tok"]) for tk in included_turns) for name in PRICES}
-    astra_all = scen["gpt-6-astra"]
+    astra_all = scen.get(ASTRA, scen.get("gpt-6-astra", 0.0))
     result = {
         "at": datetime.datetime.now().isoformat(timespec="seconds"),
         "policy_version": poc.POLICY_VERSION,
@@ -231,8 +260,8 @@ def main():
     print("100% scenarios: " + " · ".join(
         f"{k.split('/')[-1]} ${v:.0f}" for k, v in sorted(scen.items(), key=lambda x: x[1])))
     print(f"full-Astra baseline: ${astra_all:.0f} (fixed token volume; not measured quota)")
-    print("-" * 72)
-    for k in ("gpt-5.6-luna", "gpt-5.6-sol", "gpt-6-astra"):
+    summary_models = list(dict.fromkeys(list(dist_counts.keys()) + [LUNA, SOL, ASTRA]))
+    for k in summary_models:
         print(f"  {k:<14} {dist_counts.get(k,0):>4} turns · ${dist_costs.get(k,0):.2f}")
     print(f"result: {RESULT_PATH}")
     return 0
