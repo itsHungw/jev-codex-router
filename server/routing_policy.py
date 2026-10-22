@@ -1,9 +1,33 @@
 """Compact Jev contract: model, effort, lease and mandatory-frontier policy."""
 import math
+import os
 
 POLICY_VERSION = "split-v11-native-first-fallback"
-LUNA, SOL, ASTRA = "gpt-5.6-luna", "gpt-5.6-sol", "gpt-6-astra"
-TERRA = "gpt-5.6-terra"
+
+def _load_tier_model(name, default):
+    override = os.environ.get("JEV_ENV_FILE", "").strip()
+    home = os.environ.get("HOME", "")
+    paths = (override, os.path.join(home, ".hermes", ".env"), os.path.join(home, ".jev.env"))
+    for path in paths:
+        if path and os.path.exists(path):
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    for line in fh:
+                        line = line.strip()
+                        prefix = f"{name}="
+                        if line.startswith(prefix):
+                            val = line.split("=", 1)[1].strip().strip('"').strip("'")
+                            if val:
+                                return val
+            except OSError:
+                pass
+    return os.environ.get(name, default).strip() or default
+
+
+LUNA = _load_tier_model("JEV_MODEL_LUNA", "gpt-5.6-luna")
+SOL = _load_tier_model("JEV_MODEL_SOL", "gpt-5.6-sol")
+ASTRA = _load_tier_model("JEV_MODEL_ASTRA", "gpt-6-astra")
+TERRA = _load_tier_model("JEV_MODEL_TERRA", "gpt-5.6-terra")
 TIERS = (LUNA, TERRA, SOL, ASTRA)
 EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 LEASES = ("one_call", "tool_chain", "user_turn")

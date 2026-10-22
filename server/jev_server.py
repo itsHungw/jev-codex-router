@@ -912,7 +912,10 @@ def _debug_shape(payload):
 
 ROUTE_GLYPHS = {
     "gpt-5.6-luna": ("luna", "⚡"),      # cheap tier, adaptive thinking
+    "gpt-6-luna": ("luna", "⚡"),
     "gpt-5.6-sol": ("sol", "🧠"),        # reasoning workhorse
+    "gpt-6-sol": ("sol", "🧠"),
+    "gpt-6.1-sol": ("sol", "🧠"),
     "gpt-6-astra": ("astra", "🚀"),      # frontier
     "gpt-5.6-terra": ("terra", "🌍"),
 }
@@ -1208,11 +1211,17 @@ def remember_route_lease(scope, payload, step, decision, status, now=None):
 
 def route_label(model):
     """(short name, glyph) of a routed call — the vocabulary of both tags."""
+    if not model:
+        return "?", "⚡"
     short, glyph = ROUTE_GLYPHS.get(model, (None, None))
-    if not short:
-        leaf = (model or "?").split("/")[-1]
-        short, glyph = TANDEM_GLYPHS.get(leaf, (leaf, "⚡"))
-    return short, glyph
+    if short:
+        return short, glyph
+    m_lower = model.lower()
+    for name, icon in (("luna", "⚡"), ("terra", "🌍"), ("sol", "🧠"), ("astra", "🚀")):
+        if name in m_lower:
+            return name, icon
+    leaf = model.split("/")[-1]
+    return TANDEM_GLYPHS.get(leaf, (leaf, "⚡"))
 
 
 def route_marker(model, effort):
