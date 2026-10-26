@@ -96,11 +96,16 @@ import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from local_runtime import (
-    STATE, LocalServer, append_private, authorized, local_secret, protect_logs,
+    CODEX_HOME, STATE, LocalServer, append_private, authorized, local_secret, protect_logs,
 )
 
 from routing_policy import (ASTRA, EFFORTS, LUNA, POLICY_VERSION, QUESTIONS, SOL, TERRA,
                             TIERS, decision_from_answers, route)
+
+CODEX_AUTH_PATH = (
+    os.environ.get("MODEL_ROUTER_CODEX_AUTH")
+    or os.path.join(CODEX_HOME, "auth.json")
+)
 
 HOME = os.path.expanduser("~")
 ENV_PATH = os.path.join(HOME, ".hermes", ".env")
@@ -354,25 +359,65 @@ def quota_reset_at(headers, body):
     return at if at and at > now else None
 
 
+def current_native_account_fingerprint():
+    """Opaque non-secret fingerprint of the active native ChatGPT account."""
+    if not os.path.exists(CODEX_AUTH_PATH):
+        return None
+    try:
+        data = _read_json(CODEX_AUTH_PATH)
+        if not isinstance(data, dict):
+            return None
+        tokens = data.get("tokens")
+        if not isinstance(tokens, dict):
+            return None
+        account_id = str(tokens.get("account_id") or "").strip()
+        owner_id = str(tokens.get("login_owner_id") or "").strip()
+        if not account_id and not owner_id:
+            return None
+        ident = f"{account_id}:{owner_id}"
+        return hashlib.sha256(ident.encode("utf-8")).hexdigest()[:16]
+    except Exception:
+        return None
+
+
 def native_dry():
     """Reason native usage is considered exhausted, or None while it is fine.
 
     The manual flag wins; the auto state carries an expiry so a stale flip
-    can never pin the router to fallback forever.
+    can never pin the router to fallback forever. A switch to another
+    native account clears the dry state automatically.
     """
     if os.path.exists(DRY_MANUAL_PATH):
         return "manual"
     state = _read_json(DRY_STATE_PATH)
-    if isinstance(state, dict) and float(state.get("until") or 0) > time.time():
+    if not isinstance(state, dict):
+        return None
+    recorded_account = state.get("account")
+    current_account = current_native_account_fingerprint()
+    if recorded_account and current_account and recorded_account != current_account:
+        clear_native_dry()
+        return None
+    if not recorded_account and current_account:
+        try:
+            if (
+                os.path.exists(CODEX_AUTH_PATH)
+                and os.path.exists(DRY_STATE_PATH)
+                and os.path.getmtime(CODEX_AUTH_PATH) > os.path.getmtime(DRY_STATE_PATH) + 2
+            ):
+                clear_native_dry()
+                return None
+        except OSError:
+            pass
+    if float(state.get("until") or 0) > time.time():
         return str(state.get("reason") or "quota")
     return None
 
 
-def mark_native_dry(reason, resets_at=None):
+def mark_native_dry(reason, resets_at=None, account=None):
     """Flip to external fallback, for as long as the exhausted window stays shut.
 
     `resets_at` is the instant the edge said the window reopens. Ending the
-    state just after it is what sends the next call back to the native native model ladder
+    state just after it is what sends the next call back to the native model ladder
     as soon as the quota returns; without that announcement the flip keeps the
     bounded cooldown instead.
     """
@@ -380,15 +425,20 @@ def mark_native_dry(reason, resets_at=None):
     until = now + DRY_COOLDOWN_S
     if resets_at and resets_at > now:
         until = min(resets_at + DRY_RESET_SKEW_S, now + DRY_MAX_HORIZON_S)
+    if account is None:
+        account = current_native_account_fingerprint()
+    payload = {
+        "reason": reason,
+        "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "until": until,
+        "until_iso": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(until)),
+    }
+    if account:
+        payload["account"] = account
     try:
         tmp = DRY_STATE_PATH + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump({
-                "reason": reason,
-                "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                "until": until,
-                "until_iso": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(until)),
-            }, fh)
+            json.dump(payload, fh)
         os.replace(tmp, DRY_STATE_PATH)
     except OSError:
         pass

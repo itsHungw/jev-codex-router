@@ -225,6 +225,37 @@ class QuotaReset(unittest.TestCase):
                     saved = json.load(fh)
                 self.assertAlmostEqual(saved["until"], time.time() + jev.DRY_COOLDOWN_S, delta=5)
 
+    def test_dry_state_clears_automatically_when_account_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = os.path.join(tmp, "dry.json")
+            flag = os.path.join(tmp, "flag")
+            with mock.patch.object(jev, "DRY_STATE_PATH", state), mock.patch.object(
+                jev, "DRY_MANUAL_PATH", flag
+            ):
+                with mock.patch.object(jev, "current_native_account_fingerprint", return_value="acc1"):
+                    jev.mark_native_dry("quota", resets_at=time.time() + 3600)
+                    self.assertEqual(jev.native_dry(), "quota")
+                    self.assertTrue(os.path.exists(state))
+
+                # User switched to acc2: native_dry should clear dry.json and return None
+                with mock.patch.object(jev, "current_native_account_fingerprint", return_value="acc2"):
+                    self.assertIsNone(jev.native_dry())
+                    self.assertFalse(os.path.exists(state))
+
+    def test_dry_state_persists_when_account_is_the_same(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = os.path.join(tmp, "dry.json")
+            flag = os.path.join(tmp, "flag")
+            with mock.patch.object(jev, "DRY_STATE_PATH", state), mock.patch.object(
+                jev, "DRY_MANUAL_PATH", flag
+            ):
+                with mock.patch.object(jev, "current_native_account_fingerprint", return_value="acc1"):
+                    jev.mark_native_dry("quota", resets_at=time.time() + 3600)
+                    self.assertEqual(jev.native_dry(), "quota")
+                    self.assertTrue(os.path.exists(state))
+                    self.assertEqual(jev.native_dry(), "quota")
+                    self.assertTrue(os.path.exists(state))
+
 
 class DryTandem(unittest.TestCase):
     def test_frontier_steps_go_to_glm_and_the_rest_to_deepseek(self):
